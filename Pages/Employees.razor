@@ -1,0 +1,228 @@
+@page "/employees"
+@using AssetManagementApp.Models
+@inject AssetManagementApp.Services.IEmployeeService EmployeeService
+@inject NavigationManager NavigationManager
+
+<h3>Employees</h3>
+
+<div class="mb-3 d-flex">
+    <input class="form-control me-2" @bind="searchText" placeholder="Search by name, dept or email" />
+    <button class="btn btn-primary" @onclick="Search">Search</button>
+    <button class="btn btn-secondary ms-2" @onclick="ClearSearch">Clear</button>
+    <button class="btn btn-success ms-auto" @onclick="ShowAdd">+ Add Employee</button>
+</div>
+
+@if (isLoading)
+{
+    <div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div>
+}
+else
+{
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>Full Name</th>
+                <th>Department</th>
+                <th>Email</th>
+                <th>Phone</th>
+                <th>Designation</th>
+                <th>Status</th>
+                <th style="width:160px">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (filteredEmployees?.Any() != true)
+            {
+                <tr><td colspan="7" class="text-muted">No employees found.</td></tr>
+            }
+            else
+            {
+                @foreach (var emp in filteredEmployees)
+                {
+                    <tr>
+                        <td>@emp.FullName</td>
+                        <td>@emp.Department</td>
+                        <td>@emp.Email</td>
+                        <td>@emp.PhoneNumber</td>
+                        <td>@emp.Designation</td>
+                        <td>@(emp.Status ? "Active" : "Inactive")</td>
+                        <td>
+                            <button class="btn btn-sm btn-primary me-1" @onclick="() => Edit(emp.Id)">Edit</button>
+                            <button class="btn btn-sm btn-danger" @onclick="() => Delete(emp.Id)">Delete</button>
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+}
+
+<!-- Add/Edit form (modal-like) -->
+@if (showForm)
+{
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal d-block" tabindex="-1" style="display:block; background: rgba(0,0,0,0.4);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">@((editingEmployee?.Id > 0) ? "Edit Employee" : "Add Employee")</h5>
+                    <button type="button" class="btn-close" @onclick="CloseForm"></button>
+                </div>
+                <div class="modal-body">
+                    <EditForm Model="editingEmployee" OnValidSubmit="SaveEmployee">
+                        <DataAnnotationsValidator />
+                        <ValidationSummary />
+
+                        <div class="mb-3">
+                            <label class="form-label">Full Name</label>
+                            <InputText class="form-control" @bind-Value="editingEmployee.FullName" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Department</label>
+                            <InputText class="form-control" @bind-Value="editingEmployee.Department" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Email</label>
+                            <InputText class="form-control" @bind-Value="editingEmployee.Email" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Phone Number</label>
+                            <InputText class="form-control" @bind-Value="editingEmployee.PhoneNumber" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Designation</label>
+                            <InputText class="form-control" @bind-Value="editingEmployee.Designation" />
+                        </div>
+
+                        <div class="mb-3 form-check">
+                            <InputCheckbox class="form-check-input" @bind-Value="editingEmployee.Status" />
+                            <label class="form-check-label">Active</label>
+                        </div>
+
+                        <div class="text-end">
+                            <button class="btn btn-secondary me-2" type="button" @onclick="CloseForm">Cancel</button>
+                            <button class="btn btn-primary" type="submit">Save</button>
+                        </div>
+                    </EditForm>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<Employee> employees = new();
+    private IEnumerable<Employee> filteredEmployees = Enumerable.Empty<Employee>();
+    private bool isLoading = true;
+
+    private bool showForm = false;
+    private Employee editingEmployee = new();
+    private string searchText = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadEmployees();
+    }
+
+    private async Task LoadEmployees()
+    {
+        isLoading = true;
+        try
+        {
+            var all = (await EmployeeService.GetAllAsync()).ToList();
+            employees = all;
+            filteredEmployees = employees;
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ShowAdd()
+    {
+        editingEmployee = new Employee { Status = true };
+        showForm = true;
+    }
+
+    private async Task Edit(int id)
+    {
+        var e = await EmployeeService.GetByIdAsync(id);
+        if (e != null)
+        {
+            editingEmployee = new Employee
+            {
+                Id = e.Id,
+                FullName = e.FullName,
+                Department = e.Department,
+                Email = e.Email,
+                PhoneNumber = e.PhoneNumber,
+                Designation = e.Designation,
+                Status = e.Status
+            };
+            showForm = true;
+        }
+    }
+
+    private async Task SaveEmployee()
+    {
+        if (editingEmployee.Id > 0)
+        {
+            await EmployeeService.UpdateAsync(editingEmployee);
+        }
+        else
+        {
+            await EmployeeService.AddAsync(editingEmployee);
+        }
+
+        showForm = false;
+        await LoadEmployees();
+    }
+
+    private async Task Delete(int id)
+    {
+        var ok = await JsConfirm($"Are you sure you want to delete employee ID {id}? This cannot be undone.");
+        if (!ok) return;
+
+        await EmployeeService.DeleteAsync(id);
+        await LoadEmployees();
+    }
+
+    // Simple JS confirm wrapper (uses browser confirm via IJSRuntime)
+    [Inject] private IJSRuntime Js { get; set; } = default!;
+    private async Task<bool> JsConfirm(string message)
+    {
+        return await Js.InvokeAsync<bool>("confirm", message);
+    }
+
+    private void CloseForm()
+    {
+        showForm = false;
+    }
+
+    private void Search()
+    {
+        if (string.IsNullOrWhiteSpace(searchText))
+        {
+            filteredEmployees = employees;
+            return;
+        }
+
+        var s = searchText.Trim().ToLowerInvariant();
+        filteredEmployees = employees.Where(e =>
+            (e.FullName ?? string.Empty).ToLowerInvariant().Contains(s) ||
+            (e.Department ?? string.Empty).ToLowerInvariant().Contains(s) ||
+            (e.Email ?? string.Empty).ToLowerInvariant().Contains(s));
+    }
+
+    private void ClearSearch()
+    {
+        searchText = string.Empty;
+        filteredEmployees = employees;
+    }
+}

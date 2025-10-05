@@ -1,0 +1,349 @@
+@page "/assignments"
+@using AssetManagementApp.Models
+@inject AssetManagementApp.Services.IAssetService AssetService
+@inject AssetManagementApp.Services.IEmployeeService EmployeeService
+@inject IJSRuntime Js
+
+<h3>Assignments</h3>
+
+<div class="row mb-3">
+    <div class="col-md-4">
+        <input class="form-control" placeholder="Search by asset serial or employee name" value="@searchText" @oninput="OnSearchInput" />
+    </div>
+    <div class="col-md-3">
+    <select class="form-select" 
+            @bind="historyEmployeeId" 
+            @bind:after="async () => await OnHistoryEmployeeChanged()">
+        <option value="">-- View history for (optional) --</option>
+        @foreach (var e in employees)
+        {
+            <option value="@e.Id">@e.FullName</option>
+        }
+    </select>
+    </div>
+    <div class="col-md-5 text-end">
+        <button class="btn btn-outline-secondary me-2" @onclick="ExportCurrentAssignmentsCsv">Export Current</button>
+        <button class="btn btn-outline-secondary me-2" @onclick="ExportHistoryCsv">Export History</button>
+        <button class="btn btn-success" @onclick="OpenAssignModal">+ Assign Asset</button>
+    </div>
+</div>
+
+@if (isLoading)
+{
+    <div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div>
+}
+else
+{
+    <h5>Current Assignments (@(currentAssignments?.Count ?? 0))</h5>
+    <table class="table table-sm table-striped">
+        <thead>
+            <tr>
+                <th>Asset</th>
+                <th>Serial</th>
+                <th>Employee</th>
+                <th>Assigned Date</th>
+                <th>Notes</th>
+                <th style="width:120px">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (filteredCurrentAssignments?.Any() != true)
+            {
+                <tr><td colspan="6" class="text-muted">No current assignments found.</td></tr>
+            }
+            else
+            {
+                @foreach (var a in filteredCurrentAssignments)
+                {
+                    <tr>
+                        <td>@a.Asset?.Name ?? ("#" + a.AssetId)</td>
+                        <td>@a.Asset?.SerialNumber ?? "-"</td>
+                        <td>@a.Employee?.FullName ?? ("#" + a.EmployeeId)</td>
+                        <td>@a.AssignedDate.ToString("yyyy-MM-dd")</td>
+                        <td>@a.Notes</td>
+                        <td>
+                            <button class="btn btn-sm btn-primary me-1" @onclick="() => OpenReturnConfirm(a.Id)">Return</button>
+                            <button class="btn btn-sm btn-secondary" @onclick="() => ViewAssignmentDetails(a.Id)">Details</button>
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+
+    <hr />
+
+    <h5>Assignment History @(historyEmployeeId.HasValue ? $"for {employees.FirstOrDefault(x=>x.Id==historyEmployeeId)?.FullName}" : "")</h5>
+    @if (historyAssignments == null || !historyAssignments.Any())
+    {
+        <p class="text-muted">No history to show.</p>
+    }
+    else
+    {
+        <table class="table table-sm">
+            <thead>
+                <tr>
+                    <th>Asset</th>
+                    <th>Serial</th>
+                    <th>Employee</th>
+                    <th>Assigned</th>
+                    <th>Returned</th>
+                    <th>Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var h in historyAssignments)
+                {
+                    <tr>
+                        <td>@h.Asset?.Name ?? ("#" + h.AssetId)</td>
+                        <td>@h.Asset?.SerialNumber ?? "-"</td>
+                        <td>@h.Employee?.FullName ?? ("#" + h.EmployeeId)</td>
+                        <td>@h.AssignedDate.ToString("yyyy-MM-dd")</td>
+                        <td>@(h.ReturnedDate?.ToString("yyyy-MM-dd") ?? "-")</td>
+                        <td>@h.Notes</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+<!-- Assign modal -->
+@if (showAssignModal)
+{
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal d-block" tabindex="-1" style="display:block; background: rgba(0,0,0,0.4);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Assign Asset</h5>
+                    <button type="button" class="btn-close" @onclick="CloseAssignModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Asset (Available)</label>
+                        <select class="form-select" @bind="selectedAssetId">
+                            <option value="">-- Select asset --</option>
+                            @foreach (var asset in availableAssets)
+                            {
+                                <option value="@asset.Id">@asset.Name (@asset.SerialNumber)</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Employee</label>
+                        <select class="form-select" @bind="selectedEmployeeId">
+                            <option value="">-- Select employee --</option>
+                            @foreach (var emp in employees)
+                            {
+                                <option value="@emp.Id">@emp.FullName</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Notes (optional)</label>
+                        <textarea class="form-control" rows="3" @bind="assignNotes"></textarea>
+                    </div>
+
+                    <div class="text-end">
+                        <button class="btn btn-secondary me-2" @onclick="CloseAssignModal">Cancel</button>
+                        <button class="btn btn-primary" @onclick="DoAssign">Assign</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    // Data
+    private List<AssetAssignment> currentAssignments = new();
+    private IEnumerable<AssetAssignment> filteredCurrentAssignments = Enumerable.Empty<AssetAssignment>();
+    private List<AssetAssignment> historyAssignments = new();
+    private List<Asset> availableAssets = new();
+    private List<Employee> employees = new();
+
+    // UI state
+    private bool isLoading = true;
+    private bool showAssignModal = false;
+
+    // assign form state
+    private int? selectedAssetId;
+    private int? selectedEmployeeId;
+    private string assignNotes = string.Empty;
+
+    // filters / search
+    private string searchText = string.Empty;
+    private int? historyEmployeeId = null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAll();
+    }
+
+    private async Task LoadAll()
+    {
+        isLoading = true;
+        try
+        {
+            employees = (await EmployeeService.GetAllAsync()).ToList();
+            availableAssets = (await AssetService.GetAvailableAssetsAsync()).ToList();
+            currentAssignments = (await AssetService.GetCurrentAssignmentsAsync()).ToList();
+
+            // Eager-load navigation props if service doesn't already (Asset, Employee)
+            // (Services should ideally return assignments with Asset & Employee included)
+
+            ApplyCurrentFilter();
+            await LoadHistory(); // loads history for selected employee if any
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ApplyCurrentFilter()
+    {
+        if (string.IsNullOrWhiteSpace(searchText))
+        {
+            filteredCurrentAssignments = currentAssignments;
+            return;
+        }
+
+        var s = searchText.Trim().ToLowerInvariant();
+        filteredCurrentAssignments = currentAssignments.Where(a =>
+            (a.Asset?.SerialNumber ?? string.Empty).ToLowerInvariant().Contains(s) ||
+            (a.Asset?.Name ?? string.Empty).ToLowerInvariant().Contains(s) ||
+            (a.Employee?.FullName ?? string.Empty).ToLowerInvariant().Contains(s));
+    }
+
+    private async Task LoadHistory()
+    {
+        if (historyEmployeeId.HasValue)
+        {
+            historyAssignments = (await AssetService.GetAssignmentHistoryByEmployeeAsync(historyEmployeeId.Value)).ToList();
+        }
+        else
+        {
+            historyAssignments = new List<AssetAssignment>(); // empty
+        }
+    }
+
+    private void OnSearchInput(ChangeEventArgs e)
+    {
+        searchText = e.Value?.ToString() ?? string.Empty;
+        ApplyCurrentFilter();
+    }
+
+    private async Task OnHistoryEmployeeChanged()
+    {
+        await LoadHistory();
+    }
+
+
+    private void OpenAssignModal()
+    {
+        selectedAssetId = null;
+        selectedEmployeeId = null;
+        assignNotes = string.Empty;
+        showAssignModal = true;
+    }
+
+    private void CloseAssignModal()
+    {
+        showAssignModal = false;
+    }
+
+    private async Task DoAssign()
+    {
+        if (!selectedAssetId.HasValue || !selectedEmployeeId.HasValue)
+        {
+            await Js.InvokeVoidAsync("alert", "Select both asset and employee before assigning.");
+            return;
+        }
+
+        try
+        {
+            await AssetService.AssignToEmployeeAsync(selectedAssetId.Value, selectedEmployeeId.Value, assignNotes);
+            showAssignModal = false;
+            await LoadAll();
+        }
+        catch (Exception ex)
+        {
+            await Js.InvokeVoidAsync("alert", $"Assign failed: {ex.Message}");
+        }
+    }
+
+
+    private async Task OpenReturnConfirm(int assignmentId)
+    {
+        var ok = await Js.InvokeAsync<bool>("confirm", "Mark asset as returned?");
+        if (!ok) return;
+
+        try
+        {
+            await AssetService.ReturnAssignmentAsync(assignmentId);
+            await LoadAll();
+        }
+        catch (Exception ex)
+        {
+            await Js.InvokeVoidAsync("alert", $"Return failed: {ex.Message}");
+        }
+    }
+
+    private void ViewAssignmentDetails(int assignmentId)
+    {
+        var single = currentAssignments.FirstOrDefault(x => x.Id == assignmentId);
+        if (single != null)
+            filteredCurrentAssignments = new[] { single };
+    }
+
+
+    private async Task ExportCurrentAssignmentsCsv()
+    {
+        var list = filteredCurrentAssignments.ToList();
+        if (!list.Any())
+        {
+            await Js.InvokeVoidAsync("alert", "No records to export.");
+            return;
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("AssignmentId,AssetId,AssetName,Serial,EmployeeId,EmployeeName,AssignedDate,Notes");
+        foreach (var a in list)
+        {
+            sb.AppendLine($"\"{a.Id}\",\"{a.AssetId}\",\"{EscapeCsv(a.Asset?.Name)}\",\"{EscapeCsv(a.Asset?.SerialNumber)}\",\"{a.EmployeeId}\",\"{EscapeCsv(a.Employee?.FullName)}\",\"{a.AssignedDate:yyyy-MM-dd}\",\"{EscapeCsv(a.Notes)}\"");
+        }
+
+        var url = "data:text/csv;charset=utf-8," + Uri.EscapeDataString(sb.ToString());
+        await Js.InvokeVoidAsync("open", url, "_blank");
+    }
+
+    private async Task ExportHistoryCsv()
+    {
+        if (!historyAssignments.Any())
+        {
+            await Js.InvokeVoidAsync("alert", "No history to export.");
+            return;
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("AssignmentId,AssetId,AssetName,Serial,EmployeeId,EmployeeName,AssignedDate,ReturnedDate,Notes");
+        foreach (var h in historyAssignments)
+        {
+            sb.AppendLine($"\"{h.Id}\",\"{h.AssetId}\",\"{EscapeCsv(h.Asset?.Name)}\",\"{EscapeCsv(h.Asset?.SerialNumber)}\",\"{h.EmployeeId}\",\"{EscapeCsv(h.Employee?.FullName)}\",\"{h.AssignedDate:yyyy-MM-dd}\",\"{(h.ReturnedDate?.ToString("yyyy-MM-dd") ?? "")}\",\"{EscapeCsv(h.Notes)}\"");
+        }
+
+        var url = "data:text/csv;charset=utf-8," + Uri.EscapeDataString(sb.ToString());
+        await Js.InvokeVoidAsync("open", url, "_blank");
+    }
+
+    private static string EscapeCsv(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return string.Empty;
+        return s.Replace("\"", "\"\"");
+    }
+}

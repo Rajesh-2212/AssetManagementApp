@@ -1,0 +1,476 @@
+@page "/assets"
+@using AssetManagementApp.Models
+@inject AssetManagementApp.Services.IAssetService AssetService
+@inject AssetManagementApp.Services.IEmployeeService EmployeeService
+@inject IJSRuntime Js
+@inject NavigationManager Nav
+
+<h3>Assets</h3>
+
+<div class="row mb-3 g-2">
+    <div class="col-auto">
+        <input class="form-control" placeholder="Search by serial or name" value="@searchText" @oninput="OnSearchInput" />
+    </div>
+
+    <div class="col-auto">
+        <select class="form-select" value="@filterType" @onchange="OnFilterTypeChanged">
+            <option value="">— All Types —</option>
+            @foreach (var t in distinctTypes)
+            {
+                <option value="@t">@t</option>
+            }
+        </select>
+    </div>
+
+    <div class="col-auto">
+        <select class="form-select" value="@filterStatus" @onchange="OnFilterStatusChanged">
+            <option value="">— All Status —</option>
+            @foreach (var s in Enum.GetValues(typeof(AssetStatus)).Cast<AssetStatus>())
+            {
+                <option value="@s">@s</option>
+            }
+        </select>
+    </div>
+
+    <div class="col-auto">
+        <select class="form-select" value="@filterAssignedEmployeeString" @onchange="OnFilterAssignedEmployeeChanged">
+            <option value="">— Any Employee —</option>
+            @foreach (var e in employees)
+            {
+                <option value="@e.Id">@e.FullName</option>
+            }
+        </select>
+    </div>
+
+    <div class="col-auto ms-auto d-flex">
+        <button class="btn btn-outline-secondary me-2" @onclick="ExportCsv">Export CSV</button>
+        <button class="btn btn-success" @onclick="ShowAdd">+ Add Asset</button>
+    </div>
+</div>
+
+@if (isLoading)
+{
+    <div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div>
+}
+else
+{
+    <table class="table table-hover table-sm">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Make/Model</th>
+                <th>Serial Number</th>
+                <th>Condition</th>
+                <th>Status</th>
+                <th>Warranty Expiry</th>
+                <th>Assigned To</th>
+                <th style="width:190px">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (!filteredAssets.Any())
+            {
+                <tr><td colspan="9" class="text-muted">No assets found.</td></tr>
+            }
+            else
+            {
+                @foreach (var a in filteredAssets)
+                {
+                    <tr>
+                        <td>@a.Name</td>
+                        <td>@a.AssetType</td>
+                        <td>@a.MakeModel</td>
+                        <td>@a.SerialNumber</td>
+                        <td>@a.Condition</td>
+                        <td>@a.Status</td>
+                        <td>@(a.WarrantyExpiryDate?.ToString("yyyy-MM-dd") ?? "-")</td>
+                        <td>@GetAssignedEmployeeName(a)</td>
+                        <td>
+                            <button class="btn btn-sm btn-primary me-1" @onclick="() => Edit(a.Id)">Edit</button>
+                            <button class="btn btn-sm btn-secondary me-1" @onclick="() => OpenAssignModal(a.Id)">Assign</button>
+                            <button class="btn btn-sm btn-danger" @onclick="() => Delete(a.Id)">Delete</button>
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+}
+
+@if (showForm)
+{
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal d-block" tabindex="-1" style="display:block; background: rgba(0,0,0,0.4);">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">@((editingAsset?.Id > 0) ? "Edit Asset" : "Add Asset")</h5>
+                    <button type="button" class="btn-close" @onclick="CloseForm"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- Use EditForm and Inputs (we have _Imports.razor so components are available) -->
+                    <EditForm Model="editingAsset" OnValidSubmit="SaveAsset">
+                        <DataAnnotationsValidator />
+                        <ValidationSummary />
+
+                        <div class="row g-2">
+                            <div class="col-md-6">
+                                <label class="form-label">Name</label>
+                                <InputText class="form-control" @bind-Value="editingAsset.Name" />
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Type</label>
+                                <InputText class="form-control" @bind-Value="editingAsset.AssetType" />
+                            </div>
+
+                            <div class="col-md-6">
+                                <label class="form-label">Make / Model</label>
+                                <InputText class="form-control" @bind-Value="editingAsset.MakeModel" />
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Serial Number</label>
+                                <InputText class="form-control" @bind-Value="editingAsset.SerialNumber" />
+                            </div>
+
+                            <div class="col-md-6">
+                                <label class="form-label">Purchase Date</label>
+                                <InputDate class="form-control" @bind-Value="editingAsset.PurchaseDate" />
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Warranty Expiry</label>
+                                <InputDate class="form-control" @bind-Value="editingAsset.WarrantyExpiryDate" />
+                            </div>
+
+                            <div class="col-md-6">
+                                <label class="form-label">Condition</label>
+                                <InputSelect class="form-select" @bind-Value="editingAsset.Condition">
+                                    @foreach (var c in Enum.GetValues(typeof(AssetCondition)).Cast<AssetCondition>())
+                                    {
+                                        <option value="@c">@c</option>
+                                    }
+                                </InputSelect>
+                            </div>
+
+                            <div class="col-md-6">
+                                <label class="form-label">Status</label>
+                                <InputSelect class="form-select" @bind-Value="editingAsset.Status">
+                                    @foreach (var s in Enum.GetValues(typeof(AssetStatus)).Cast<AssetStatus>())
+                                    {
+                                        <option value="@s">@s</option>
+                                    }
+                                </InputSelect>
+                            </div>
+
+                            <div class="col-12">
+                                <label class="form-label">Is Spare</label>
+                                <div class="form-check">
+                                    <InputCheckbox class="form-check-input" @bind-Value="editingAsset.IsSpare" />
+                                    <label class="form-check-label ms-2">Spare</label>
+                                </div>
+                            </div>
+
+                            <div class="col-12">
+                                <label class="form-label">Specifications / Details</label>
+                                <InputTextArea class="form-control" rows="4" @bind-Value="editingAsset.Specifications" />
+                            </div>
+                        </div>
+
+                        <div class="mt-3 text-end">
+                            <button class="btn btn-secondary me-2" type="button" @onclick="CloseForm">Cancel</button>
+                            <button class="btn btn-primary" type="submit">Save</button>
+                        </div>
+                    </EditForm>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Assign modal -->
+@if (showAssign)
+{
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal d-block" tabindex="-1" style="display:block; background: rgba(0,0,0,0.4);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Assign Asset</h5>
+                    <button type="button" class="btn-close" @onclick="CloseAssign"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Asset</label>
+                        <div><strong>@assignAsset?.Name</strong> — @assignAsset?.SerialNumber</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Assign to employee</label>
+                        <select class="form-select" @bind="assignEmployeeId">
+                            <option value="">— Select employee —</option>
+                            @foreach (var e in employees)
+                            {
+                                <option value="@e.Id">@e.FullName</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Notes (optional)</label>
+                        <textarea class="form-control" rows="3" @bind="assignNotes"></textarea>
+                    </div>
+
+                    <div class="text-end">
+                        <button class="btn btn-secondary me-2" @onclick="CloseAssign">Cancel</button>
+                        <button class="btn btn-primary" @onclick="DoAssign">Assign</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<Asset> assets = new();
+    private List<Employee> employees = new();
+    private IEnumerable<Asset> filteredAssets = Enumerable.Empty<Asset>();
+
+    private bool isLoading = true;
+    private bool showForm = false;
+    private Asset editingAsset = new() {
+        Name = string.Empty,
+        AssetType = string.Empty,
+        MakeModel = string.Empty,
+        SerialNumber = string.Empty,
+        Specifications = string.Empty,
+        Condition = AssetCondition.Good,
+        Status = AssetStatus.Available,
+        IsSpare = false
+    };
+
+    private bool showAssign = false;
+    private Asset? assignAsset;
+    private int? assignEmployeeId;
+    private string assignNotes = string.Empty;
+
+    private string searchText = string.Empty;
+    private string filterType = string.Empty;
+    private string filterStatus = string.Empty;
+    private string filterAssignedEmployeeString = string.Empty;
+    private int? filterAssignedEmployee = null;
+
+    private List<string> distinctTypes = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        isLoading = true;
+        try
+        {
+            employees = (await EmployeeService.GetAllAsync()).ToList();
+            assets = (await AssetService.GetAllAsync()).ToList();
+
+            distinctTypes = assets.Select(a => a.AssetType ?? string.Empty)
+                                  .Where(t => !string.IsNullOrWhiteSpace(t))
+                                  .Distinct(StringComparer.InvariantCultureIgnoreCase)
+                                  .OrderBy(t => t)
+                                  .ToList();
+
+            ApplyFilters();
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    // --- Event handlers for inputs (explicit to avoid duplicate attrs) ---
+    private void OnSearchInput(ChangeEventArgs e)
+    {
+        searchText = e.Value?.ToString() ?? string.Empty;
+        ApplyFilters();
+    }
+
+    private void OnFilterTypeChanged(ChangeEventArgs e)
+    {
+        filterType = e.Value?.ToString() ?? string.Empty;
+        ApplyFilters();
+    }
+
+    private void OnFilterStatusChanged(ChangeEventArgs e)
+    {
+        filterStatus = e.Value?.ToString() ?? string.Empty;
+        ApplyFilters();
+    }
+
+    private void OnFilterAssignedEmployeeChanged(ChangeEventArgs e)
+    {
+        filterAssignedEmployeeString = e.Value?.ToString() ?? string.Empty;
+        if (int.TryParse(filterAssignedEmployeeString, out var id))
+            filterAssignedEmployee = id;
+        else
+            filterAssignedEmployee = null;
+
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        IEnumerable<Asset> q = assets;
+
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            var s = searchText.Trim().ToLowerInvariant();
+            q = q.Where(a => (a.SerialNumber ?? string.Empty).ToLowerInvariant().Contains(s)
+                             || (a.Name ?? string.Empty).ToLowerInvariant().Contains(s)
+                             || (a.MakeModel ?? string.Empty).ToLowerInvariant().Contains(s));
+        }
+
+        if (!string.IsNullOrWhiteSpace(filterType))
+        {
+            q = q.Where(a => string.Equals(a.AssetType ?? string.Empty, filterType, StringComparison.InvariantCultureIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(filterStatus) && Enum.TryParse<AssetStatus>(filterStatus, out var st))
+        {
+            q = q.Where(a => a.Status == st);
+        }
+
+        if (filterAssignedEmployee.HasValue && filterAssignedEmployee.Value > 0)
+        {
+            q = q.Where(a => a.Assignments?.Any(asg => asg.ReturnedDate == null && asg.EmployeeId == filterAssignedEmployee.Value) == true);
+        }
+
+        filteredAssets = q.OrderBy(a => a.Name).ToList();
+    }
+
+    private string GetAssignedEmployeeName(Asset a)
+    {
+        var current = a.Assignments?.FirstOrDefault(x => x.ReturnedDate == null);
+        if (current == null) return "-";
+        var emp = employees.FirstOrDefault(e => e.Id == current.EmployeeId);
+        return emp?.FullName ?? $"#{current.EmployeeId}";
+    }
+
+    private void ShowAdd()
+    {
+        editingAsset = new Asset
+        {
+            Name = string.Empty,
+            AssetType = string.Empty,
+            MakeModel = string.Empty,
+            SerialNumber = string.Empty,
+            Specifications = string.Empty,
+            Condition = AssetCondition.Good,
+            Status = AssetStatus.Available,
+            IsSpare = false
+        };
+        showForm = true;
+    }
+
+    private async Task Edit(int id)
+    {
+        var a = await AssetService.GetByIdAsync(id);
+        if (a != null)
+        {
+            editingAsset = new Asset
+            {
+                Id = a.Id,
+                Name = a.Name ?? string.Empty,
+                AssetType = a.AssetType ?? string.Empty,
+                MakeModel = a.MakeModel ?? string.Empty,
+                SerialNumber = a.SerialNumber ?? string.Empty,
+                PurchaseDate = a.PurchaseDate,
+                WarrantyExpiryDate = a.WarrantyExpiryDate,
+                Condition = a.Condition,
+                Status = a.Status,
+                IsSpare = a.IsSpare,
+                Specifications = a.Specifications ?? string.Empty
+            };
+            showForm = true;
+        }
+    }
+
+    private async Task SaveAsset()
+    {
+        if (editingAsset.Id > 0)
+        {
+            await AssetService.UpdateAsync(editingAsset);
+        }
+        else
+        {
+            await AssetService.AddAsync(editingAsset);
+        }
+
+        showForm = false;
+        await LoadData();
+    }
+
+    private async Task Delete(int id)
+    {
+        var ok = await Js.InvokeAsync<bool>("confirm", $"Delete asset {id}? This is permanent.");
+        if (!ok) return;
+        await AssetService.DeleteAsync(id);
+        await LoadData();
+    }
+
+    private void OpenAssignModal(int assetId)
+    {
+        assignAsset = assets.FirstOrDefault(a => a.Id == assetId);
+        assignEmployeeId = null;
+        assignNotes = string.Empty;
+        showAssign = true;
+    }
+
+    private void CloseAssign()
+    {
+        showAssign = false;
+        assignAsset = null;
+    }
+
+    private async Task DoAssign()
+    {
+        if (assignAsset == null || !assignEmployeeId.HasValue) return;
+
+        try
+        {
+            await AssetService.AssignToEmployeeAsync(assignAsset.Id, assignEmployeeId.Value, assignNotes);
+            showAssign = false;
+            await LoadData();
+        }
+        catch (Exception ex)
+        {
+            await Js.InvokeVoidAsync("alert", $"Error: {ex.Message}");
+        }
+    }
+
+    private void CloseForm()
+    {
+        showForm = false;
+    }
+
+    private async Task ExportCsv()
+    {
+        var list = filteredAssets.ToList();
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Id,Name,Type,MakeModel,SerialNumber,Condition,Status,IsSpare,PurchaseDate,WarrantyExpiry,Specifications,AssignedTo");
+        foreach (var a in list)
+        {
+            var assigned = GetAssignedEmployeeName(a);
+            sb.AppendLine($"\"{a.Id}\",\"{EscapeCsv(a.Name)}\",\"{EscapeCsv(a.AssetType)}\",\"{EscapeCsv(a.MakeModel)}\",\"{EscapeCsv(a.SerialNumber)}\",\"{a.Condition}\",\"{a.Status}\",\"{a.IsSpare}\",\"{a.PurchaseDate:yyyy-MM-dd}\",\"{a.WarrantyExpiryDate:yyyy-MM-dd}\",\"{EscapeCsv(a.Specifications)}\",\"{EscapeCsv(assigned)}\"");
+        }
+
+        var csv = sb.ToString();
+        var url = "data:text/csv;charset=utf-8," + Uri.EscapeDataString(csv);
+        await Js.InvokeVoidAsync("open", url, "_blank");
+    }
+
+    private static string EscapeCsv(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return string.Empty;
+        return s.Replace("\"", "\"\"");
+    }
+}
